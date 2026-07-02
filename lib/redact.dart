@@ -24,5 +24,6 @@
 library;
 
 export 'src/detector.dart';
+export 'src/detectors.dart';
 export 'src/pii_match.dart';
 export 'src/pii_type.dart';
