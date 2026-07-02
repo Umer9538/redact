@@ -27,6 +27,7 @@ export 'src/detector.dart';
 export 'src/detectors.dart';
 export 'src/keyword_detector.dart';
 export 'src/luhn.dart';
+export 'src/packs.dart';
 export 'src/pii_match.dart';
 export 'src/pii_type.dart';
 export 'src/redaction_result.dart';
