@@ -73,12 +73,33 @@ void main() {
 
   group('overlap resolution', () {
     test('a more specific detector wins over the generic phone matcher', () {
-      // 123-45-6789 is structurally phone-like but is a valid SSN; SSN is
-      // higher priority in Detectors.defaults, so it must win.
+      // 123-45-6789 is structurally phone-like but is a valid SSN; the spans
+      // are identical, so the tie goes to SSN (earlier in Detectors.defaults).
       final result = Redactor().redact('id 123-45-6789 end');
       expect(result.count, 1);
       expect(result.matches.single.type, PiiType.ssn);
       expect(result.text, 'id [SSN_1] end');
+    });
+
+    test('a longer span beats a shorter higher-priority match inside it', () {
+      // Mirrors the real IBAN-vs-card case: a low-priority detector matching
+      // the full value must beat a high-priority detector matching a fragment.
+      final fragment = PatternDetector(
+        name: 'fragment',
+        type: PiiType.custom,
+        pattern: RegExp(r'\d{4}'),
+        label: 'FRAGMENT',
+      );
+      final whole = PatternDetector(
+        name: 'whole',
+        type: PiiType.custom,
+        pattern: RegExp(r'AB\d{4}X'),
+        label: 'WHOLE',
+      );
+      final result =
+          Redactor(detectors: [fragment, whole]).redact('ref AB1234X done');
+      expect(result.matches.single.value, 'AB1234X');
+      expect(result.text, 'ref [WHOLE_1] done');
     });
   });
 

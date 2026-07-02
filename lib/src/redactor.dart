@@ -8,8 +8,9 @@ import 'redaction_style.dart';
 /// Finds and rewrites PII in text before it leaves the device.
 ///
 /// A [Redactor] runs a set of [Detector]s over the input, resolves any overlaps
-/// between them (the more specific detector wins), and rewrites each detected
-/// value according to a [RedactionStyle]. The default configuration uses
+/// between them (the longest validated span wins; ties go to the earlier
+/// detector in the list), and rewrites each detected value according to a
+/// [RedactionStyle]. The default configuration uses
 /// [Detectors.defaults] with [RedactionStyle.placeholder], producing reversible
 /// output:
 ///
@@ -44,7 +45,8 @@ class Redactor {
         styleOverrides = Map.unmodifiable(styleOverrides ?? const {}),
         _replacer = replacer;
 
-  /// The detectors run over the input, in priority order (first wins overlaps).
+  /// The detectors run over the input. On overlapping matches of equal length,
+  /// the detector earlier in this list wins.
   final List<Detector> detectors;
 
   /// The default rewrite style applied to categories without an override.
@@ -115,14 +117,16 @@ class Redactor {
     return out;
   }
 
-  /// Greedy interval resolution: accept highest-priority (then longest, then
-  /// earliest) matches that do not overlap anything already accepted.
+  /// Greedy interval resolution: accept the longest matches first (a longer
+  /// validated span contains strictly more of the sensitive value — e.g. a
+  /// full IBAN must beat a card number matched inside it), breaking ties by
+  /// detector priority (earlier in [detectors] wins) and then position.
   List<PiiMatch> _resolve(List<(PiiMatch, int)> candidates) {
     candidates.sort((a, b) {
-      final byPriority = a.$2.compareTo(b.$2);
-      if (byPriority != 0) return byPriority;
       final byLength = b.$1.length.compareTo(a.$1.length);
       if (byLength != 0) return byLength;
+      final byPriority = a.$2.compareTo(b.$2);
+      if (byPriority != 0) return byPriority;
       return a.$1.start.compareTo(b.$1.start);
     });
 
