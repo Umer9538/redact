@@ -81,13 +81,25 @@ class Redactor {
   }
 
   /// Detects PII in [text] and returns the rewritten text plus a reversal vault.
-  RedactionResult redact(String text) {
+  ///
+  /// Each call starts a fresh vault: placeholder indices restart at 1 and
+  /// [RedactionResult.mapping] covers only this call. For multi-turn
+  /// conversations, use a [RedactionSession] so tokens stay consistent across
+  /// calls.
+  RedactionResult redact(String text) =>
+      _redact(text, indices: {}, counters: {}, vault: {});
+
+  /// The engine behind [redact] and [RedactionSession.redact]: rewrites [text]
+  /// using (and updating) the caller's token state.
+  RedactionResult _redact(
+    String text, {
+    required Map<String, Map<String, int>> indices, // label -> value -> idx
+    required Map<String, int> counters, // label -> last index used
+    required Map<String, String> vault, // token -> original value
+  }) {
     final accepted = detect(text); // sorted by start, then longer first
 
     final buffer = StringBuffer();
-    final mapping = <String, String>{};
-    final indices = <String, Map<String, int>>{}; // token label -> value -> idx
-    final counters = <String, int>{}; // token label -> last index used
     _seedCounters(text, counters);
     var cursor = 0;
 
@@ -110,7 +122,7 @@ class Redactor {
       cursor = match.end;
 
       if (reversible && replacement.isNotEmpty) {
-        mapping[replacement] = match.value;
+        vault[replacement] = match.value;
       }
     }
     buffer.write(text.substring(cursor));
@@ -118,7 +130,9 @@ class Redactor {
     return RedactionResult(
       text: buffer.toString(),
       matches: List.unmodifiable(accepted),
-      mapping: Map.unmodifiable(mapping),
+      // Snapshot: for a session this is the *cumulative* vault, so the result
+      // can restore replies that reference tokens from earlier turns.
+      mapping: Map.unmodifiable(Map.of(vault)),
     );
   }
 
@@ -172,4 +186,95 @@ class Redactor {
     }
     return accepted;
   }
+}
+
+/// A stateful redaction scope that keeps tokens consistent across calls —
+/// what a multi-turn LLM conversation needs.
+///
+/// Each plain [Redactor.redact] call restarts indices at 1, so in a chat,
+/// turn one's `[EMAIL_1]` (alice) and turn two's `[EMAIL_1]` (bob) would be
+/// two *different* values behind one token: the model sees an ambiguous
+/// conversation, and restoring a reply that references an earlier turn
+/// substitutes the wrong data. A session keeps one vault for its whole
+/// lifetime: the same value maps to the same token forever, new values keep
+/// counting up, and [restore] works for a reply referencing any turn.
+///
+/// ```dart
+/// final session = RedactionSession();
+/// session.redact('mail alice@x.com').text; // mail [EMAIL_1]
+/// session.redact('mail bob@x.com').text;   // mail [EMAIL_2]
+/// session.restore('cc [EMAIL_1] and [EMAIL_2]');
+/// // -> 'cc alice@x.com and bob@x.com'
+/// ```
+///
+/// Use [toJson]/[RedactionSession.fromJson] to persist a session across app
+/// restarts. **The serialized vault contains the original PII by design** —
+/// store it only somewhere as protected as the source data itself.
+class RedactionSession {
+  /// Creates an empty session. [redactor] defaults to `Redactor()`.
+  RedactionSession({Redactor? redactor}) : redactor = redactor ?? Redactor();
+
+  /// Restores a session persisted with [toJson].
+  ///
+  /// The [redactor] configuration is not serialized; pass the same one the
+  /// session was created with.
+  factory RedactionSession.fromJson(
+    Map<String, Object?> json, {
+    Redactor? redactor,
+  }) {
+    final session = RedactionSession(redactor: redactor);
+    (json['counters'] as Map<Object?, Object?>? ?? {}).forEach(
+      (label, index) => session._counters[label! as String] = index! as int,
+    );
+    (json['indices'] as Map<Object?, Object?>? ?? {}).forEach((label, values) {
+      final perValue = session._indices.putIfAbsent(label! as String, () => {});
+      (values! as Map<Object?, Object?>).forEach(
+        (value, index) => perValue[value! as String] = index! as int,
+      );
+    });
+    (json['vault'] as Map<Object?, Object?>? ?? {}).forEach(
+      (token, value) => session._vault[token! as String] = value! as String,
+    );
+    return session;
+  }
+
+  /// The redactor whose detectors and styles this session applies.
+  final Redactor redactor;
+
+  final Map<String, Map<String, int>> _indices = {};
+  final Map<String, int> _counters = {};
+  final Map<String, String> _vault = {};
+
+  /// Redacts [text], keeping tokens consistent with every earlier call: a
+  /// value seen before reuses its token, and the returned
+  /// [RedactionResult.mapping] is the cumulative session vault.
+  RedactionResult redact(String text) => redactor._redact(
+        text,
+        indices: _indices,
+        counters: _counters,
+        vault: _vault,
+      );
+
+  /// Convenience wrapper returning only the redacted text.
+  String scrub(String text) => redact(text).text;
+
+  /// Substitutes original values into [input] for tokens from *any* turn of
+  /// this session, with the same lenient matching as [restoreTokens].
+  String restore(String input) => restoreTokens(input, _vault);
+
+  /// A read-only snapshot of the accumulated token → original-value vault.
+  Map<String, String> get vault => Map.unmodifiable(_vault);
+
+  /// Serializes the session state (counters, value indices, and the vault).
+  ///
+  /// The output contains the original PII — treat it like the data itself.
+  Map<String, Object?> toJson() => {
+        'version': 1,
+        'counters': Map<String, Object?>.of(_counters),
+        'indices': {
+          for (final entry in _indices.entries)
+            entry.key: Map<String, Object?>.of(entry.value),
+        },
+        'vault': Map<String, Object?>.of(_vault),
+      };
 }
