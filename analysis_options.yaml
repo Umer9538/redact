@@ -1,0 +1,17 @@
+# Static analysis config. Uses the pub.dev-scored `recommended` set plus a few
+# stricter rules that keep the public API tidy and well-documented.
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    - public_member_api_docs
+    - prefer_final_locals
+    - prefer_const_constructors
+    - always_declare_return_types
+    - unnecessary_lambdas
+    - directives_ordering

@@ -1,0 +1,25 @@
+name: redact
+description: >-
+  On-device, precision-first PII redaction for Dart and Flutter. Scrub emails,
+  phones, cards, SSNs and more from text before it reaches any LLM, then restore
+  the model's reply.
+version: 0.1.0
+repository: https://github.com/Umer9538/redact
+issue_tracker: https://github.com/Umer9538/redact/issues
+
+topics:
+  - privacy
+  - security
+  - llm
+  - pii
+  - redaction
+
+environment:
+  sdk: ^3.6.0
+
+# Zero runtime dependencies: pure Dart, works in Flutter apps, servers, and CLIs.
+dependencies:
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0
