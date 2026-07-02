@@ -69,6 +69,44 @@ void main() {
       expect(result.mapping, isEmpty);
       expect(result.restore(result.text), result.text);
     });
+
+    test('restore tolerates LLM token mangling', () {
+      final result = Redactor().redact('mail jane@acme.com');
+      // Markdown-escaped underscore, lowercased, and both at once.
+      expect(result.restore(r'sent to [EMAIL\_1].'), 'sent to jane@acme.com.');
+      expect(result.restore('sent to [email_1].'), 'sent to jane@acme.com.');
+      expect(result.restore(r'sent to [email\_1].'), 'sent to jane@acme.com.');
+      // Bold-wrapped tokens work because the brackets survive.
+      expect(
+        result.restore('sent to **[EMAIL_1]**.'),
+        'sent to **jane@acme.com**.',
+      );
+    });
+
+    test('restore never clobbers [X_1] inside [X_10]', () {
+      final emails = List.generate(10, (i) => 'user$i@x.com');
+      final result = Redactor().redact(emails.join(' '));
+      expect(result.text, contains('[EMAIL_10]'));
+      expect(result.restore(result.text), emails.join(' '));
+    });
+
+    test('a literal token already in the input is left alone', () {
+      // The input itself contains '[EMAIL_1]'; the real email must be seeded
+      // past it, and restore must not touch the user's literal text.
+      const original = 'template uses [EMAIL_1]; contact jane@acme.com';
+      final result = Redactor().redact(original);
+      expect(result.text, 'template uses [EMAIL_1]; contact [EMAIL_2]');
+      expect(result.mapping.keys, ['[EMAIL_2]']);
+      expect(result.restore(result.text), original);
+    });
+
+    test('restoreTokens is single-pass: restored values are not rescanned', () {
+      final out = restoreTokens(
+        'a [X_1] b',
+        {'[X_1]': 'contains [Y_1]', '[Y_1]': 'MUST NOT APPEAR'},
+      );
+      expect(out, 'a contains [Y_1] b');
+    });
   });
 
   group('overlap resolution', () {

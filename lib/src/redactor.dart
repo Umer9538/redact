@@ -87,7 +87,8 @@ class Redactor {
     final buffer = StringBuffer();
     final mapping = <String, String>{};
     final indices = <String, Map<String, int>>{}; // token label -> value -> idx
-    final counters = <String, int>{}; // token label -> next index
+    final counters = <String, int>{}; // token label -> last index used
+    _seedCounters(text, counters);
     var cursor = 0;
 
     for (final match in accepted) {
@@ -123,6 +124,19 @@ class Redactor {
 
   /// Convenience wrapper returning only the redacted text.
   String scrub(String text) => redact(text).text;
+
+  /// Seeds [counters] past any token-shaped literals already present in the
+  /// input, so generated placeholders never collide with pre-existing text
+  /// (and restore can never corrupt the user's own literal `[EMAIL_1]`).
+  static void _seedCounters(String text, Map<String, int> counters) {
+    for (final m in _literalToken.allMatches(text)) {
+      final label = m.group(1)!;
+      final index = int.parse(m.group(2)!);
+      if (index > (counters[label] ?? 0)) counters[label] = index;
+    }
+  }
+
+  static final RegExp _literalToken = RegExp(r'\[([A-Z][A-Z0-9_]*)_(\d+)\]');
 
   /// Runs every detector, tagging each match with its detector's priority
   /// (its index in [detectors]; lower wins equal-length overlap ties).
