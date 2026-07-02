@@ -1,10 +1,11 @@
 // Run with: dart run example/redact_example.dart
 //
-// Demonstrates the four things `redact` is for:
+// Demonstrates the five things `redact` is for:
 //   1. Scrubbing PII out of text before it reaches an LLM.
 //   2. The reversible pipeline: redact -> call the model -> restore the reply.
 //   3. Per-category styles (mask a card, placeholder everything else).
 //   4. Extending detection with your own domain-specific Detector.
+//   5. Multi-turn conversations with a RedactionSession.
 
 import 'package:redact/redact.dart';
 
@@ -13,6 +14,7 @@ void main() {
   _reversiblePipeline();
   _perCategoryStyles();
   _customDetector();
+  _conversation();
 }
 
 void _basic() {
@@ -67,6 +69,17 @@ void _customDetector() {
   final result =
       redactor.redact('Patient MRN-004512 booked with dr@clinic.org');
   print(result.text);
+}
+
+void _conversation() {
+  print('== 5. Multi-turn conversation ==');
+  // A plain Redactor would call BOTH addresses [EMAIL_1] (one per call) —
+  // ambiguous for the model, wrong on restore. A session keeps one vault.
+  final session = RedactionSession();
+  print('turn 1: ${session.redact('alice@x.com requested a refund').text}');
+  print('turn 2: ${session.redact('bob@x.com must approve it').text}');
+  // The model replies referencing both turns; restore knows every token:
+  print('reply : ${session.restore('Ask [EMAIL_2] to confirm [EMAIL_1].')}');
 }
 
 /// A stand-in for a real LLM call. It just echoes a placeholder it was given,
