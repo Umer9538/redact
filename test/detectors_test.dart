@@ -206,6 +206,11 @@ void main() {
       expect(found(d, 'x 2001:db8::192.0.2.33 y'), ['2001:db8::192.0.2.33']);
       expect(found(d, 'x 64:ff9b::192.0.2.1 y'), ['64:ff9b::192.0.2.1']);
     });
+    test('ignores bare :: and letter-only fragments in prose/code', () {
+      expect(found(d, 'the :: operator resolves scope'), isEmpty);
+      expect(found(d, 'alias ad::be in the codebase'), isEmpty);
+      expect(found(d, 'x A::B y'), isEmpty);
+    });
   });
 
   group('mac', () {

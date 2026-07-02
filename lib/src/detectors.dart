@@ -110,11 +110,14 @@ abstract final class Detectors {
   );
 
   /// IPv6 addresses, including `::`-compressed and IPv4-mapped/-embedded
-  /// forms such as `::ffff:192.0.2.1`.
+  /// forms such as `::ffff:192.0.2.1`. A match must contain a digit: bare
+  /// `::` and letter-only fragments like `ad::be` are prose/code, not
+  /// addresses worth the false positive.
   static final Detector ipv6 = PatternDetector(
     name: 'ipv6',
     type: PiiType.ipv6,
     pattern: RegExp(_ipv6),
+    validator: _containsDigit,
   );
 
   /// MAC hardware addresses, e.g. `01:23:45:67:89:ab` or dash-separated.
@@ -224,13 +227,16 @@ const String _ipv6 = r'(?<![\w:])(?:'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,3}(?::[A-Fa-f0-9]{1,4}){1,4}'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,2}(?::[A-Fa-f0-9]{1,4}){1,5}'
     r'|[A-Fa-f0-9]{1,4}:(?::[A-Fa-f0-9]{1,4}){1,6}'
-    r'|:(?:(?::[A-Fa-f0-9]{1,4}){1,7}|:)'
+    r'|:(?::[A-Fa-f0-9]{1,4}){1,7}'
     r')(?![\w:])(?!\.\d)';
 
 final RegExp _nonDigits = RegExp(r'\D');
 
 int _digitCount(String value) =>
     value.codeUnits.where((u) => u >= 0x30 && u <= 0x39).length;
+
+bool _containsDigit(String value) =>
+    value.codeUnits.any((u) => u >= 0x30 && u <= 0x39);
 
 /// Whether all non-digit characters in [value] are the same single separator.
 bool _oneSeparator(String value) {
