@@ -44,6 +44,24 @@ void main() {
         ['415-555-0132', '415-555-0199'],
       );
     });
+    test('a phone before a short digit run is trimmed back, not leaked', () {
+      // The bridge into the year/ZIP/date is <=15 digits, so only a
+      // validator-driven trim can recover the phone.
+      final suffixes = ['24/7', '2024', '94105', '100 times', '12.05.2024'];
+      for (final suffix in suffixes) {
+        expect(found(d, 'call 415-555-0132 $suffix ok'), ['415-555-0132'],
+            reason: 'suffix "$suffix" must not defeat the phone');
+      }
+      expect(found(d, '415.555.0132 2024'), ['415.555.0132']);
+    });
+    test('matches strong prefixes with a contiguous national block', () {
+      expect(found(d, 'mob +92 3001234567 pls'), ['+92 3001234567']);
+      expect(found(d, 'tel (021) 34567890 pls'), ['(021) 34567890']);
+      expect(found(d, 'tel +49 30901820 x'), ['+49 30901820']);
+    });
+    test('matches 8-digit subscriber groups (PK/DE landlines)', () {
+      expect(found(d, 'll 021 34567890 pls'), ['021 34567890']);
+    });
     test('ignores bare digit runs and too-short/long sequences', () {
       expect(found(d, 'order 1234567890123456 shipped'), isEmpty);
       expect(found(d, 'room 12-34'), isEmpty); // only 4 digits

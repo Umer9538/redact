@@ -31,8 +31,9 @@ abstract final class Detectors {
     pattern: RegExp(
       r'(?<![\w+.-])(?:'
       r'\+\d{7,15}'
+      r'|(?:\+\d{1,3}[ .-]|\(\d{1,4}\)[ .-]?)\d{5,13}'
       r'|(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?'
-      r'\d{2,4}(?:[ .-]\d{2,7}){1,4}'
+      r'\d{2,4}(?:[ .-]\d{2,8}){1,4}'
       r')(?!\w)',
     ),
     refine: _refinePhone,
@@ -252,11 +253,16 @@ bool _plausibleEmail(String value) {
 }
 
 /// Trims a phone match that bridged into an adjacent number: while the span
-/// holds more digits than any phone number can (15), drop the last group —
-/// preferring to split at a space, the usual boundary between two numbers.
+/// fails validation (too many digits, mixed separators from crossing into a
+/// neighbouring year/ZIP/date, …), drop the last group — preferring to split
+/// at a space, the usual boundary between two numbers. Returns the longest
+/// valid prefix, or null when no prefix validates (a date, an ISBN, …).
+///
+/// The raw span is bounded by the pattern (a handful of groups), so this
+/// loop is O(1)-ish per candidate.
 String? _refinePhone(String raw) {
   var value = raw;
-  while (_digitCount(value) > 15) {
+  while (!_validPhone(value)) {
     var cut = value.lastIndexOf(' ');
     if (cut <= 0) cut = value.lastIndexOf(RegExp(r'[.-]'));
     if (cut <= 0) return null;
