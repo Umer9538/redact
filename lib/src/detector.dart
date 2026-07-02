@@ -26,17 +26,29 @@ abstract interface class Detector {
 /// require but not redact. An optional [validator] can reject a syntactic match
 /// that fails a semantic check (for example, a card-shaped number that fails
 /// the Luhn checksum), which is how detectors stay precision-first.
+///
+/// An optional [refine] callback can *trim* a greedy raw match down to the
+/// valid prefix (returning `null` to reject it entirely). This is how the
+/// bundled IBAN and card detectors recover when the regex over-matches into an
+/// adjacent word or number: the trailing junk is stripped group by group until
+/// the checksum passes, instead of discarding the whole span.
+///
+/// Rejected candidates never blackhole their span: scanning resumes just past
+/// the rejected match's start, so shorter or later candidates inside it are
+/// still considered.
 class PatternDetector implements Detector {
   /// Creates a detector that emits a [PiiMatch] of [type] for each match of
-  /// [pattern] that passes the optional [validator].
+  /// [pattern] that passes the optional [refine] and [validator] steps.
   const PatternDetector({
     required this.name,
     required this.type,
     required RegExp pattern,
     bool Function(String value)? validator,
+    String? Function(String raw)? refine,
     String? label,
   })  : _pattern = pattern,
         _validator = validator,
+        _refine = refine,
         _label = label;
 
   @override
@@ -47,23 +59,44 @@ class PatternDetector implements Detector {
 
   final RegExp _pattern;
   final bool Function(String value)? _validator;
+  final String? Function(String raw)? _refine;
   final String? _label;
 
   @override
   Iterable<PiiMatch> detect(String text) sync* {
     final validator = _validator;
-    for (final match in _pattern.allMatches(text)) {
-      final value = match.group(0);
-      if (value == null || value.isEmpty) continue;
-      if (validator != null && !validator(value)) continue;
+    final refine = _refine;
+    var from = 0;
+    while (from <= text.length) {
+      final match = _pattern.allMatches(text, from).firstOrNull;
+      if (match == null) break;
+      final raw = match.group(0);
+      if (raw == null || raw.isEmpty) {
+        from = match.start + 1;
+        continue;
+      }
+      // Refine may trim a greedy raw match down to a valid prefix.
+      final value = refine == null ? raw : refine(raw);
+      final valid = value != null &&
+          value.isNotEmpty &&
+          raw.startsWith(value) &&
+          (validator == null || validator(value));
+      if (!valid) {
+        // Do not skip the whole rejected span: a valid candidate may start
+        // just after it (e.g. a card that the greedy pattern bridged into an
+        // adjacent number). Leading boundary assertions keep this cheap.
+        from = match.start + 1;
+        continue;
+      }
       yield PiiMatch(
         type: type,
         value: value,
         start: match.start,
-        end: match.end,
+        end: match.start + value.length,
         detector: name,
         label: type == PiiType.custom ? _label : null,
       );
+      from = match.start + value.length;
     }
   }
 }
