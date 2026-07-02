@@ -142,4 +142,64 @@ void main() {
       expect(Redactor().scrub('mail a@b.com'), 'mail [EMAIL_1]');
     });
   });
+
+  group('detect', () {
+    test('returns the exact spans redact would rewrite, without rewriting', () {
+      const text = 'mail a@b.com or call 415-555-0132';
+      final redactor = Redactor();
+      final spans = redactor.detect(text);
+      expect(spans, redactor.redact(text).matches);
+      for (final m in spans) {
+        expect(text.substring(m.start, m.end), m.value);
+      }
+    });
+
+    test('spans are sorted and non-overlapping', () {
+      final spans = Redactor().detect('a@b.com 4111 1111 1111 1111 ::1');
+      for (var i = 1; i < spans.length; i++) {
+        expect(spans[i].start, greaterThanOrEqualTo(spans[i - 1].end));
+      }
+    });
+  });
+
+  group('allowList', () {
+    test('allow-listed values are never redacted', () {
+      final redactor = Redactor(allowList: {'support@acme.com'});
+      final result =
+          redactor.redact('write support@acme.com, not jane@acme.com');
+      expect(result.text, 'write support@acme.com, not [EMAIL_1]');
+      expect(result.mapping['[EMAIL_1]'], 'jane@acme.com');
+    });
+  });
+
+  group('KeywordDetector', () {
+    test('redacts known literals with the given label', () {
+      final redactor = Redactor(detectors: [
+        KeywordDetector(
+            keywords: ['Jane Austen', 'Project Nightjar'], label: 'NAME'),
+        ...Detectors.defaults,
+      ]);
+      final result = redactor
+          .redact('Jane Austen shared Project Nightjar with jane@acme.com');
+      expect(result.text, '[NAME_1] shared [NAME_2] with [EMAIL_1]');
+      expect(result.restore(result.text),
+          'Jane Austen shared Project Nightjar with jane@acme.com');
+    });
+
+    test('is case-insensitive by default and word-bounded', () {
+      final detector = KeywordDetector(keywords: ['umer']);
+      expect(detector.detect('UMER and Umer').length, 2);
+      expect(detector.detect('umerville numeric'), isEmpty);
+    });
+
+    test('longer keywords win over their own prefixes', () {
+      final detector = KeywordDetector(keywords: ['Jane', 'Jane Austen']);
+      final values = detector.detect('by Jane Austen').map((m) => m.value);
+      expect(values, ['Jane Austen']);
+    });
+
+    test('empty keyword list detects nothing', () {
+      expect(KeywordDetector(keywords: const []).detect('anything'), isEmpty);
+    });
+  });
 }

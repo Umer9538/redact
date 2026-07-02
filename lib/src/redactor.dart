@@ -35,14 +35,20 @@ class Redactor {
   /// [detectors] defaults to [Detectors.defaults]. [style] is the default
   /// rewrite style; [styleOverrides] sets a style for specific [PiiType]s. A
   /// custom [replacer], if given, takes over from [style]/[styleOverrides]
-  /// entirely and is treated as reversible (its tokens populate the vault).
+  /// entirely and is treated as reversible (its tokens populate the vault) —
+  /// it must therefore be *injective*: two different values (or the same value
+  /// under two different indices) must never produce the same replacement, or
+  /// [RedactionResult.restore] cannot tell them apart. Values listed in
+  /// [allowList] are never redacted (exact match on the detected span).
   Redactor({
     List<Detector>? detectors,
     this.style = RedactionStyle.placeholder,
     Map<PiiType, RedactionStyle>? styleOverrides,
     Replacer? replacer,
+    Iterable<String>? allowList,
   })  : detectors = List.unmodifiable(detectors ?? Detectors.defaults),
         styleOverrides = Map.unmodifiable(styleOverrides ?? const {}),
+        allowList = Set.unmodifiable(allowList ?? const <String>{}),
         _replacer = replacer;
 
   /// The detectors run over the input. On overlapping matches of equal length,
@@ -55,15 +61,28 @@ class Redactor {
   /// Per-category style overrides.
   final Map<PiiType, RedactionStyle> styleOverrides;
 
+  /// Detected values that are never redacted (exact match).
+  final Set<String> allowList;
+
   final Replacer? _replacer;
 
   /// The effective style for [type].
   RedactionStyle styleFor(PiiType type) => styleOverrides[type] ?? style;
 
+  /// Detects PII in [text] without rewriting anything.
+  ///
+  /// Returns the resolved, non-overlapping matches in order of appearance —
+  /// the exact spans [redact] would rewrite. Useful for highlighting detected
+  /// PII in a UI (each [PiiMatch] carries `start`/`end` offsets into [text])
+  /// or for auditing without producing redacted output.
+  List<PiiMatch> detect(String text) {
+    final accepted = _resolve(_collect(text))..sort();
+    return List.unmodifiable(accepted);
+  }
+
   /// Detects PII in [text] and returns the rewritten text plus a reversal vault.
   RedactionResult redact(String text) {
-    final accepted = _resolve(_collect(text));
-    accepted.sort(); // by start, then longer first
+    final accepted = detect(text); // sorted by start, then longer first
 
     final buffer = StringBuffer();
     final mapping = <String, String>{};
@@ -106,11 +125,13 @@ class Redactor {
   String scrub(String text) => redact(text).text;
 
   /// Runs every detector, tagging each match with its detector's priority
-  /// (its index in [detectors]; lower means more specific / higher priority).
+  /// (its index in [detectors]; lower wins equal-length overlap ties).
+  /// Matches whose value is in [allowList] are dropped here.
   List<(PiiMatch, int)> _collect(String text) {
     final out = <(PiiMatch, int)>[];
     for (var priority = 0; priority < detectors.length; priority++) {
       for (final match in detectors[priority].detect(text)) {
+        if (allowList.contains(match.value)) continue;
         out.add((match, priority));
       }
     }
