@@ -81,6 +81,21 @@ void main() {
       expect(result.text, 'id [SSN_1] end');
     });
 
+    test('a full IBAN beats a Luhn-valid card matched inside it', () {
+      // AT61's digit run is Luhn-valid, so the card detector claims a
+      // fragment; the longer mod-97-validated IBAN span must win, leaving no
+      // 'AT61 ' prefix in cleartext.
+      final result = Redactor().redact('pay AT61 1904 3002 3457 3201, thanks');
+      expect(result.text, 'pay [IBAN_1], thanks');
+      expect(result.matches.single.type, PiiType.iban);
+    });
+
+    test('a card followed by its expiry is redacted, not blackholed', () {
+      final result = Redactor().redact('pay 4111 1111 1111 1111 12/26 now');
+      expect(result.text, 'pay [CREDIT_CARD_1] 12/26 now');
+      expect(result.matches.single.type, PiiType.creditCard);
+    });
+
     test('a longer span beats a shorter higher-priority match inside it', () {
       // Mirrors the real IBAN-vs-card case: a low-priority detector matching
       // the full value must beat a high-priority detector matching a fragment.

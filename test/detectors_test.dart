@@ -16,6 +16,10 @@ void main() {
     test('does not match bare @ handles or domains', () {
       expect(found(d, 'ping @handle on the site example.com'), isEmpty);
     });
+    test('does not match scaled-asset filenames', () {
+      expect(found(d, 'use logo@2x.png and icon@3x.jpg here'), isEmpty);
+      expect(found(d, 'hero@1.5x.webp too'), isEmpty);
+    });
   });
 
   group('phone', () {
@@ -25,9 +29,30 @@ void main() {
       expect(found(d, 'tel (020) 7946 0958'), ['(020) 7946 0958']);
       expect(found(d, 'ph 415.555.0199'), ['415.555.0199']);
     });
+    test('matches bare E.164 numbers', () {
+      expect(found(d, 'wa +14155550132 ok'), ['+14155550132']);
+      expect(found(d, 'call +923001234567 today'), ['+923001234567']);
+    });
+    test('matches numbers with a long final group (PK formats)', () {
+      expect(found(d, 'mob +92 300 1234567 pls'), ['+92 300 1234567']);
+      expect(found(d, 'mob 0300-1234567 pls'), ['0300-1234567']);
+      expect(found(d, 'mob 0301 2345678 pls'), ['0301 2345678']);
+    });
+    test('two adjacent phone numbers are both caught in full', () {
+      expect(
+        found(d, 'try 415-555-0132 415-555-0199 later'),
+        ['415-555-0132', '415-555-0199'],
+      );
+    });
     test('ignores bare digit runs and too-short/long sequences', () {
       expect(found(d, 'order 1234567890123456 shipped'), isEmpty);
       expect(found(d, 'room 12-34'), isEmpty); // only 4 digits
+    });
+    test('ignores dates, year ranges, and dddd-dddd references', () {
+      expect(found(d, 'shipped 2024-01-15 by air'), isEmpty);
+      expect(found(d, 'am 12.04.2026 geliefert'), isEmpty);
+      expect(found(d, 'seasons 2019-2024 combined'), isEmpty);
+      expect(found(d, 'ref 1234-5678 closed'), isEmpty);
     });
   });
 
@@ -65,8 +90,43 @@ void main() {
           ['GB82 WEST 1234 5698 7654 32']);
       expect(found(d, 'DE89370400440532013000'), ['DE89370400440532013000']);
     });
+    test('a spaced IBAN followed by a short word is trimmed, not missed', () {
+      // The optional trailing group used to swallow the next 1-4 char word,
+      // fail mod-97, and silently leak the whole account number.
+      const iban = 'PK36 SCBL 0000 0011 2345 6702';
+      for (final tail in ['ok', 'now', 'x', '2026', 'ok x']) {
+        expect(found(d, 'my iban is $iban $tail'), [iban],
+            reason: 'trailing "$tail" must not defeat the match');
+      }
+    });
     test('rejects check-digit-invalid IBANs', () {
       expect(found(d, 'GB00 WEST 1234 5698 7654 32'), isEmpty);
+    });
+  });
+
+  group('itin', () {
+    final d = Detectors.itin;
+    test('matches ITINs in IRS-assigned group ranges', () {
+      expect(found(d, 'itin 912-70-1234 filed'), ['912-70-1234']);
+      expect(found(d, 'itin 998 88 4321 filed'), ['998 88 4321']);
+    });
+    test('rejects non-9xx areas and unassigned groups', () {
+      expect(found(d, '123-70-1234'), isEmpty); // not 9xx
+      expect(found(d, '912-69-1234'), isEmpty); // group 69 unassigned
+      expect(found(d, '912-89-1234'), isEmpty); // group 89 unassigned
+      expect(found(d, '912-93-1234'), isEmpty); // group 93 unassigned
+    });
+  });
+
+  group('imei', () {
+    final d = Detectors.imei;
+    test('matches Luhn-valid IMEIs after a context word', () {
+      expect(found(d, 'IMEI: 490154203237518 blocked'), ['490154203237518']);
+      expect(found(d, 'imei 490154203237518'), ['490154203237518']);
+    });
+    test('requires the context word and the checksum', () {
+      expect(found(d, 'serial 490154203237518'), isEmpty); // no context
+      expect(found(d, 'IMEI: 490154203237519'), isEmpty); // bad Luhn
     });
   });
 
@@ -90,6 +150,13 @@ void main() {
       expect(found(d, 'loop ::1 here'), ['::1']);
       expect(found(d, 'short 2001:db8::8a2e:370:7334'),
           ['2001:db8::8a2e:370:7334']);
+    });
+    test('matches IPv4-mapped and -embedded forms in full', () {
+      // These used to half-match ('::ffff:192' + leaked '.0.2.1').
+      expect(found(d, 'x ::ffff:192.0.2.1 y'), ['::ffff:192.0.2.1']);
+      expect(found(d, 'x ::192.0.2.1 y'), ['::192.0.2.1']);
+      expect(found(d, 'x 2001:db8::192.0.2.33 y'), ['2001:db8::192.0.2.33']);
+      expect(found(d, 'x 64:ff9b::192.0.2.1 y'), ['64:ff9b::192.0.2.1']);
     });
   });
 
@@ -127,6 +194,55 @@ void main() {
     });
     test('does not match ordinary words', () {
       expect(found(d, 'the secret is safe with me'), isEmpty);
+      // Kebab-case identifiers must not trip the OpenAI sk- prefix.
+      expect(found(d, 'use sk-request-handler-factory-impl here'), isEmpty);
+    });
+    test('matches current-length Slack tokens', () {
+      const token = 'xoxb-1234567890123-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx';
+      expect(found(d, 'slack $token end'), [token]);
+    });
+    test('matches the expanded provider prefixes', () {
+      final cases = {
+        'anthropic': 'sk-ant-api03-AbCd1234EfGh5678IjKl',
+        'gitlab': 'glpat-AbCd1234EfGh5678IjKl',
+        'npm': 'npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
+        'huggingface': 'hf_AbCdEfGhIjKlMnOpQrStUvWxYz012345',
+        'digitalocean': 'dop_v1_${'0af1' * 16}',
+        'sendgrid': 'SG.AbCd1234EfGh5678.IjKl9012MnOp3456QrSt',
+        'twilio': 'SK0123456789abcdef0123456789abcdef',
+        'telegram': '123456789:AAAbCdEfGhIjKlMnOpQrStUvWxYz0123456',
+      };
+      cases.forEach((provider, token) {
+        expect(found(d, 'key $token used'), [token],
+            reason: '$provider token must match');
+      });
+    });
+  });
+
+  group('pem private keys', () {
+    final d = Detectors.pemKey;
+    test('matches a full PEM block as a single span', () {
+      const block = '-----BEGIN RSA PRIVATE KEY-----\n'
+          'MIIEpAIBAAKCAQEA7bq0\nx4dQ2mPq+ZZZ\n'
+          '-----END RSA PRIVATE KEY-----';
+      final matches = found(d, 'cfg:\n$block\ndone');
+      expect(matches, [block]);
+    });
+    test('matches OpenSSH and unlabelled variants', () {
+      const openssh = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n'
+          '-----END OPENSSH PRIVATE KEY-----';
+      const plain = '-----BEGIN PRIVATE KEY-----\nMIIE\n'
+          '-----END PRIVATE KEY-----';
+      expect(found(d, openssh), [openssh]);
+      expect(found(d, plain), [plain]);
+    });
+    test('does not match certificates or public keys', () {
+      const cert = '-----BEGIN CERTIFICATE-----\nMIIB\n'
+          '-----END CERTIFICATE-----';
+      const pub = '-----BEGIN PUBLIC KEY-----\nMIIB\n'
+          '-----END PUBLIC KEY-----';
+      expect(found(d, cert), isEmpty);
+      expect(found(d, pub), isEmpty);
     });
   });
 

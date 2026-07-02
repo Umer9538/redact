@@ -8,38 +8,53 @@ import 'pii_type.dart';
 /// total recall. Where a pattern alone is ambiguous, a semantic validator backs
 /// it up — card numbers must pass the Luhn checksum, IBANs the ISO&nbsp;7064
 /// mod-97 check, SSNs the SSA allocation rules, and IPv4 octets the 0–255 range.
+/// Detectors whose greedy pattern can over-run into adjacent text (cards,
+/// IBANs, phones) additionally *refine* the raw match, trimming trailing
+/// chunks until the checksum passes instead of discarding the whole span.
 abstract final class Detectors {
-  /// Email addresses, e.g. `jane.doe@example.com`.
+  /// Email addresses, e.g. `jane.doe@example.com`. Scaled-asset filenames that
+  /// merely look like addresses (`logo@2x.png`) are rejected.
   static final Detector email = PatternDetector(
     name: 'email',
     type: PiiType.email,
     pattern: RegExp(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'),
+    validator: _plausibleEmail,
   );
 
-  /// Telephone numbers that carry phone-like structure (a `+` prefix or
-  /// separators between digit groups) and 7–15 digits overall. Bare digit runs
-  /// with no structure are intentionally not matched, to avoid catching order
-  /// numbers and similar.
+  /// Telephone numbers: bare E.164 (`+923001234567`) or numbers with
+  /// separators between digit groups, 7–15 digits overall. Date shapes
+  /// (`2024-01-15`, `12.04.2026`) and `dddd-dddd` year ranges are rejected,
+  /// and a match that bridges into an adjacent number is trimmed back.
   static final Detector phone = PatternDetector(
     name: 'phone',
     type: PiiType.phone,
     pattern: RegExp(
-      r'(?<![\w+])(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?'
-      r'\d{2,4}(?:[ .-]\d{2,4}){1,4}(?!\w)',
+      r'(?<![\w+.-])(?:'
+      r'\+\d{7,15}'
+      r'|(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?'
+      r'\d{2,4}(?:[ .-]\d{2,7}){1,4}'
+      r')(?!\w)',
     ),
+    refine: _refinePhone,
     validator: _validPhone,
   );
 
-  /// Payment card numbers (13–19 digits) that pass the Luhn checksum.
+  /// Payment card numbers: 13–19 digits, contiguous or grouped by a single
+  /// consistent separator, that pass the Luhn checksum. A match that bridges
+  /// into an adjacent number (an expiry date, say) is trimmed back to the
+  /// valid card instead of leaking.
   static final Detector creditCard = PatternDetector(
     name: 'credit-card',
     type: PiiType.creditCard,
-    pattern: RegExp(r'(?<!\w)\d(?:[ -]?\d){12,18}(?!\w)'),
-    validator: _validCard,
+    pattern: RegExp(r'(?<![\w-])\d(?:[ -]?\d){12,}(?!\w)'),
+    refine: _refineCard,
   );
 
   /// US Social Security Numbers written `123-45-6789` (dash or space grouped),
   /// excluding SSA-invalid ranges (area 000/666/900+, group 00, serial 0000).
+  ///
+  /// Note: an SSN-shaped string that fails SSA validation may still be caught
+  /// by the more generic [phone] detector — mislabelled, but safely redacted.
   static final Detector ssn = PatternDetector(
     name: 'ssn',
     type: PiiType.ssn,
@@ -47,7 +62,30 @@ abstract final class Detectors {
     validator: _validSsn,
   );
 
-  /// IBAN bank account numbers that pass the mod-97 check.
+  /// US Individual Taxpayer Identification Numbers: SSN-shaped, area `9xx`,
+  /// with an IRS-assigned group range.
+  static final Detector itin = PatternDetector(
+    name: 'itin',
+    type: PiiType.itin,
+    pattern: RegExp(r'(?<![\w-])9\d{2}[- ]\d{2}[- ]\d{4}(?![\w-])'),
+    validator: _validItin,
+  );
+
+  /// IMEI device identifiers: 15 digits passing the Luhn checksum, anchored to
+  /// an `IMEI` context word so bare 15-digit numbers are not claimed.
+  static final Detector imei = PatternDetector(
+    name: 'imei',
+    type: PiiType.imei,
+    pattern: RegExp(
+      r'(?<=\bimei\b[:#= ]{0,3})\d{15}(?!\d)',
+      caseSensitive: false,
+    ),
+    validator: isLuhnValid,
+  );
+
+  /// IBAN bank account numbers that pass the mod-97 check. When the spaced
+  /// form over-runs into a following short word, trailing groups are trimmed
+  /// until the checksum passes.
   static final Detector iban = PatternDetector(
     name: 'iban',
     type: PiiType.iban,
@@ -56,7 +94,7 @@ abstract final class Detectors {
       r'(?:[A-Za-z0-9]{11,30}|(?: [A-Za-z0-9]{4})+(?: [A-Za-z0-9]{1,4})?)'
       r'(?![A-Za-z0-9])',
     ),
-    validator: _validIban,
+    refine: _refineIban,
   );
 
   /// IPv4 addresses with each octet range-checked to 0–255.
@@ -69,7 +107,8 @@ abstract final class Detectors {
     ),
   );
 
-  /// IPv6 addresses, including `::`-compressed forms.
+  /// IPv6 addresses, including `::`-compressed and IPv4-mapped/-embedded
+  /// forms such as `::ffff:192.0.2.1`.
   static final Detector ipv6 = PatternDetector(
     name: 'ipv6',
     type: PiiType.ipv6,
@@ -94,21 +133,43 @@ abstract final class Detectors {
     ),
   );
 
-  /// High-entropy secrets in well-known formats (AWS, GitHub, Google, Slack,
-  /// Stripe, OpenAI). Only recognised prefixes are matched, so ordinary tokens
-  /// are left alone.
+  /// PEM-encoded private keys (`-----BEGIN ... PRIVATE KEY-----` blocks),
+  /// including RSA, EC, OpenSSH, PGP and encrypted variants.
+  static final Detector pemKey = PatternDetector(
+    name: 'pem-key',
+    type: PiiType.secret,
+    pattern: RegExp(
+      r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----'
+      r'[\s\S]*?'
+      r'-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----',
+    ),
+  );
+
+  /// High-entropy secrets in well-known formats (AWS, Anthropic, GitHub,
+  /// GitLab, Google, Slack, Stripe, OpenAI, npm, PyPI, Hugging Face,
+  /// DigitalOcean, Twilio, SendGrid, Telegram). Only recognised prefixes are
+  /// matched, so ordinary tokens are left alone.
   static final Detector secret = PatternDetector(
     name: 'secret',
     type: PiiType.secret,
     pattern: RegExp(
       r'(?<![\w-])(?:'
-      r'AKIA[0-9A-Z]{16}'
+      r'sk-ant-[A-Za-z0-9_-]{20,}'
+      r'|AKIA[0-9A-Z]{16}'
       r'|gh[posru]_[A-Za-z0-9]{36}'
       r'|github_pat_[A-Za-z0-9_]{22,}'
+      r'|glpat-[A-Za-z0-9_-]{20,}'
       r'|AIza[A-Za-z0-9_-]{35}'
-      r'|xox[baprs]-[A-Za-z0-9-]{10,48}'
+      r'|xox[baprs]-[A-Za-z0-9-]{10,72}'
       r'|[sr]k_(?:live|test)_[0-9A-Za-z]{16,}'
-      r'|sk-(?:proj-)?[A-Za-z0-9_-]{20,}'
+      r'|sk-(?:proj-)?(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}'
+      r'|npm_[A-Za-z0-9]{36}'
+      r'|pypi-[A-Za-z0-9_-]{50,}'
+      r'|hf_[A-Za-z0-9]{30,40}'
+      r'|dop_v1_[a-f0-9]{64}'
+      r'|SG\.[A-Za-z0-9_-]{16,32}\.[A-Za-z0-9_-]{16,64}'
+      r'|(?:AC|SK)[a-f0-9]{32}'
+      r'|\d{8,10}:AA[A-Za-z0-9_-]{33}'
       r')(?![\w-])',
     ),
   );
@@ -121,12 +182,16 @@ abstract final class Detectors {
     pattern: RegExp(r'''(?<!\w)https?://[^\s<>()"']+'''),
   );
 
-  /// The recommended set for redacting text bound for an LLM. Ordered by
-  /// specificity so that, on an overlap, the more specific detector wins (for
-  /// example a card number beats the generic phone matcher). Excludes [url].
+  /// The recommended set for redacting text bound for an LLM. Overlaps are
+  /// resolved by span length first, so this order only breaks ties between
+  /// equal-length matches (e.g. an ITIN-shaped span beats the generic phone
+  /// matcher). Excludes [url].
   static List<Detector> get defaults => [
-        creditCard,
+        pemKey,
+        imei,
         iban,
+        creditCard,
+        itin,
         ssn,
         secret,
         jwt,
@@ -141,11 +206,15 @@ abstract final class Detectors {
   static List<Detector> get all => [...defaults, url];
 }
 
-// Raw IPv6 pattern (industry-standard alternation) kept out of line for
-// readability. Guarded by boundary assertions so it will not fire inside
-// tokens such as `foo::bar`.
+// Raw IPv6 pattern kept out of line for readability. The first three branches
+// cover IPv4-mapped/-embedded forms (::ffff:192.0.2.1, 2001:db8::192.0.2.33)
+// so they are matched whole rather than half-redacted. Boundary assertions
+// prevent firing inside tokens such as `foo::bar` or ending mid-IPv4.
 const String _ipv6 = r'(?<![\w:])(?:'
-    r'(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}'
+    r'(?:[A-Fa-f0-9]{1,4}:){6}(?:\d{1,3}\.){3}\d{1,3}'
+    r'|(?:[A-Fa-f0-9]{1,4}:){1,5}:(?:[A-Fa-f0-9]{1,4}:){0,4}(?:\d{1,3}\.){3}\d{1,3}'
+    r'|::(?:[A-Fa-f0-9]{1,4}:){0,5}(?:\d{1,3}\.){3}\d{1,3}'
+    r'|(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,7}:'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,6}:[A-Fa-f0-9]{1,4}'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,5}(?::[A-Fa-f0-9]{1,4}){1,2}'
@@ -154,16 +223,96 @@ const String _ipv6 = r'(?<![\w:])(?:'
     r'|(?:[A-Fa-f0-9]{1,4}:){1,2}(?::[A-Fa-f0-9]{1,4}){1,5}'
     r'|[A-Fa-f0-9]{1,4}:(?::[A-Fa-f0-9]{1,4}){1,6}'
     r'|:(?:(?::[A-Fa-f0-9]{1,4}){1,7}|:)'
-    r')(?![\w:])';
+    r')(?![\w:])(?!\.\d)';
 
-bool _validPhone(String value) {
-  final digits = value.replaceAll(RegExp(r'\D'), '').length;
-  return digits >= 7 && digits <= 15;
+final RegExp _nonDigits = RegExp(r'\D');
+
+int _digitCount(String value) =>
+    value.codeUnits.where((u) => u >= 0x30 && u <= 0x39).length;
+
+/// Whether all non-digit characters in [value] are the same single separator.
+bool _oneSeparator(String value) {
+  int? separator;
+  for (final unit in value.codeUnits) {
+    if (unit >= 0x30 && unit <= 0x39) continue;
+    if (separator == null) {
+      separator = unit;
+    } else if (separator != unit) {
+      return false;
+    }
+  }
+  return true;
 }
 
-bool _validCard(String value) {
-  final digits = value.replaceAll(RegExp(r'\D'), '');
-  return digits.length >= 13 && digits.length <= 19 && isLuhnValid(digits);
+bool _plausibleEmail(String value) {
+  // Scaled-asset filenames (logo@2x.png) look like emails but are not.
+  final domain = value.substring(value.indexOf('@') + 1).toLowerCase();
+  return !RegExp(r'^\d+(?:\.\d+)?x\.(?:png|jpe?g|gif|webp|svg|heic)$')
+      .hasMatch(domain);
+}
+
+/// Trims a phone match that bridged into an adjacent number: while the span
+/// holds more digits than any phone number can (15), drop the last group —
+/// preferring to split at a space, the usual boundary between two numbers.
+String? _refinePhone(String raw) {
+  var value = raw;
+  while (_digitCount(value) > 15) {
+    var cut = value.lastIndexOf(' ');
+    if (cut <= 0) cut = value.lastIndexOf(RegExp(r'[.-]'));
+    if (cut <= 0) return null;
+    value = value.substring(0, cut);
+  }
+  return value;
+}
+
+bool _validPhone(String value) {
+  final digits = _digitCount(value);
+  if (digits < 7 || digits > 15) return false;
+  if (value.startsWith('+') || value.contains('(')) return true;
+  final groups = value.split(RegExp(r'[ .-]'));
+  // Year ranges and dddd-dddd reference numbers are not phone numbers.
+  if (groups.length == 2 && groups[0].length == 4 && groups[1].length == 4) {
+    return false;
+  }
+  if (groups.length == 3 && _looksLikeDate(groups)) return false;
+  return true;
+}
+
+bool _looksLikeDate(List<String> groups) {
+  int? year, a, b;
+  if (groups[0].length == 4 && groups[1].length <= 2 && groups[2].length <= 2) {
+    year = int.parse(groups[0]); // yyyy-mm-dd
+    a = int.parse(groups[1]);
+    b = int.parse(groups[2]);
+  } else if (groups[2].length == 4 &&
+      groups[0].length <= 2 &&
+      groups[1].length <= 2) {
+    year = int.parse(groups[2]); // dd-mm-yyyy or mm-dd-yyyy
+    a = int.parse(groups[0]);
+    b = int.parse(groups[1]);
+  } else {
+    return false;
+  }
+  if (year < 1900 || year > 2100) return false;
+  if (a < 1 || b < 1 || a > 31 || b > 31) return false;
+  return a <= 12 || b <= 12; // at least one part must be a plausible month
+}
+
+/// Trims a card match that bridged into an adjacent number: drop trailing
+/// separator-delimited chunks until 13–19 digits with one consistent separator
+/// pass the Luhn checksum. Returns null when no such prefix exists.
+String? _refineCard(String raw) {
+  var value = raw;
+  while (true) {
+    final digits = value.replaceAll(_nonDigits, '');
+    if (digits.length < 13) return null;
+    if (digits.length <= 19 && _oneSeparator(value) && isLuhnValid(digits)) {
+      return value;
+    }
+    final cut = value.lastIndexOf(RegExp(r'[ -]'));
+    if (cut <= 0) return null;
+    value = value.substring(0, cut);
+  }
 }
 
 bool _validSsn(String value) {
@@ -174,6 +323,27 @@ bool _validSsn(String value) {
   if (parts[1] == '00') return false;
   if (parts[2] == '0000') return false;
   return true;
+}
+
+bool _validItin(String value) {
+  // IRS-assigned ITIN group (4th-5th digit) ranges.
+  final group = int.parse(value.split(RegExp(r'[- ]'))[1]);
+  return (group >= 50 && group <= 65) ||
+      (group >= 70 && group <= 88) ||
+      (group >= 90 && group <= 92) ||
+      (group >= 94 && group <= 99);
+}
+
+/// Trims an IBAN match whose spaced form swallowed a following short word:
+/// drop trailing space-separated groups until the mod-97 check passes.
+String? _refineIban(String raw) {
+  var value = raw;
+  while (true) {
+    if (_validIban(value)) return value;
+    final cut = value.lastIndexOf(' ');
+    if (cut <= 0) return null;
+    value = value.substring(0, cut);
+  }
 }
 
 bool _validIban(String value) {

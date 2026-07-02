@@ -16,6 +16,12 @@ enum PiiType {
   /// A US Social Security Number, e.g. `123-45-6789`.
   ssn,
 
+  /// A US Individual Taxpayer Identification Number (SSN-shaped, area `9xx`).
+  itin,
+
+  /// An IMEI mobile-device identifier (15 digits, Luhn-checked).
+  imei,
+
   /// An IBAN bank account number.
   iban,
 
@@ -49,6 +55,8 @@ enum PiiType {
         PiiType.phone => 'PHONE',
         PiiType.creditCard => 'CREDIT_CARD',
         PiiType.ssn => 'SSN',
+        PiiType.itin => 'ITIN',
+        PiiType.imei => 'IMEI',
         PiiType.iban => 'IBAN',
         PiiType.ipv4 => 'IPV4',
         PiiType.ipv6 => 'IPV6',
