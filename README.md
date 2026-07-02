@@ -39,7 +39,7 @@ log scrubbing; none do validated detection with a reversible pipeline.)
   SSNs/ITINs follow the official allocation rules, IPv4 octets are
   range-checked — and greedy matches are *trimmed back* to the checksum-valid
   span rather than silently discarded.
-- **Deterministic & tested.** Same input, same output. 145 tests including a
+- **Deterministic & tested.** Same input, same output. 163 tests including a
   false-positive trap corpus (dates, versions, hashes, prices, ISBNs) and
   seeded property-based round-trip fuzzing.
 - **Extensible.** Custom `Detector`s, a `KeywordDetector` deny-list, an
@@ -106,8 +106,14 @@ design** — store it as carefully as the data itself.
 Where a greedy pattern could over-run into adjacent text — a card followed by
 its expiry, a spaced IBAN before a short word, two phone numbers side by side —
 the detector *refines* the match, trimming trailing chunks until the checksum
-passes, instead of leaking the value. Every one of those cases is a regression
-test.
+passes, instead of leaking the value. And when a first-pass candidate loses its
+span to a longer winner (a phone right after an IBAN), detection runs again
+over the remaining gaps, so the neighbour is still caught. Every one of those
+cases is a regression test.
+
+Scope note: refinement works at separator boundaries. A value glued into a
+longer *contiguous* digit run (`…20244111111111111111…`) has no boundary to
+trim at and is deliberately treated as not-a-card — precision first.
 
 ### Country packs (opt-in)
 
@@ -227,12 +233,14 @@ Deterministic benchmark (`benchmark/bench.dart`), Apple M1, Dart 3.11, AOT
 
 | Workload | Result |
 | --- | --- |
-| 500-char chat prompt (email + phone + card) | **~0.14 ms** per call |
+| 500-char chat prompt (email + phone + card) | **~0.27 ms** per call |
 | 500-char clean prompt | ~0.12 ms per call |
-| 1 MB corpus, 2,390 PII spans across 7 types | ~267 ms → **~3.8 MB/s** |
+| 1 MB corpus, 2,390 PII spans across 7 types | ~522 ms → **~1.9 MB/s** |
 
 Redaction adds well under a millisecond to a typical chat message — three to
-four orders of magnitude less than the LLM call it protects.
+four orders of magnitude less than the LLM call it protects. (Text containing
+PII costs a second confirmation pass over the redacted gaps; that is the price
+of the no-silent-leak guarantee, and it is paid in microseconds.)
 
 ## How it compares
 
