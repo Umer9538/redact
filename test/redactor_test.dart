@@ -107,6 +107,60 @@ void main() {
       );
       expect(out, 'a contains [Y_1] b');
     });
+
+    test('lowercase/escaped literal lookalikes are seeded, not corrupted', () {
+      // '[email_1]' in the input is exactly what lenient restore would match,
+      // so the real email must be pushed past it and the literal preserved.
+      for (final original in [
+        r'note [email_1]; mail bob@x.com',
+        r'note [EMAIL\_1]; mail bob@x.com',
+      ]) {
+        final result = Redactor().redact(original);
+        expect(result.mapping.keys, ['[EMAIL_2]'],
+            reason: 'literal in "$original" must occupy index 1');
+        expect(result.restore(result.text), original);
+      }
+    });
+
+    test('absurd literal token indices do not crash seeding', () {
+      final result = Redactor()
+          .redact('[X_99999999999999999999] mail a@b.com [Y_123456789]');
+      expect(result.text, contains('[EMAIL_1]'));
+      expect(result.restore(result.text),
+          '[X_99999999999999999999] mail a@b.com [Y_123456789]');
+    });
+
+    test('custom replacer tokens are matched exactly, case-sensitively', () {
+      final redactor = Redactor(replacer: (m, i) => '<<${m.token}#$i>>');
+      final result = redactor.redact('mail a@b.com');
+      expect(result.restore('done <<EMAIL#1>>'), 'done a@b.com');
+      // A case variant is NOT the token: no PII may be injected into it.
+      expect(result.restore('done <<email#1>>'), 'done <<email#1>>');
+    });
+
+    test('bracket tokens stay lenient while custom tokens stay exact', () {
+      final out = restoreTokens(
+        'x [email_1] y <<b#1>> z',
+        {'[EMAIL_1]': 'a@b.com', '<<B#1>>': 'SECRET'},
+      );
+      expect(out, 'x a@b.com y <<b#1>> z');
+    });
+
+    test('non-UPPER_SNAKE_CASE labels are rejected at construction', () {
+      expect(
+        () => PatternDetector(
+          name: 'bad',
+          type: PiiType.custom,
+          pattern: RegExp(r'x'),
+          label: 'user-id',
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => KeywordDetector(keywords: const ['x'], label: 'lower'),
+        throwsArgumentError,
+      );
+    });
   });
 
   group('overlap resolution', () {

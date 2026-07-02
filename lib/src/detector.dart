@@ -39,7 +39,11 @@ abstract interface class Detector {
 class PatternDetector implements Detector {
   /// Creates a detector that emits a [PiiMatch] of [type] for each match of
   /// [pattern] that passes the optional [refine] and [validator] steps.
-  const PatternDetector({
+  ///
+  /// [label] (for [PiiType.custom] matches) must be `UPPER_SNAKE_CASE`
+  /// (`[A-Z][A-Z0-9_]*`): it becomes part of the placeholder token, and other
+  /// shapes would defeat the collision-seeding that protects restore.
+  PatternDetector({
     required this.name,
     required this.type,
     required RegExp pattern,
@@ -49,7 +53,23 @@ class PatternDetector implements Detector {
   })  : _pattern = pattern,
         _validator = validator,
         _refine = refine,
-        _label = label;
+        _label = label {
+    checkLabel(label);
+  }
+
+  /// Throws [ArgumentError] unless [label] is null or `UPPER_SNAKE_CASE`.
+  static void checkLabel(String? label) {
+    if (label != null && !_validLabel.hasMatch(label)) {
+      throw ArgumentError.value(
+        label,
+        'label',
+        'must be UPPER_SNAKE_CASE ([A-Z][A-Z0-9_]*) so placeholder tokens '
+            'stay collision-safe',
+      );
+    }
+  }
+
+  static final RegExp _validLabel = RegExp(r'^[A-Z][A-Z0-9_]*$');
 
   @override
   final String name;

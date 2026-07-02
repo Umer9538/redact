@@ -28,6 +28,7 @@ class KeywordDetector implements Detector {
   }) : keywords = List.unmodifiable(
           keywords.map((k) => k.trim()).where((k) => k.isNotEmpty),
         ) {
+    PatternDetector.checkLabel(label);
     _pattern = _build(this.keywords, caseSensitive: caseSensitive);
   }
 

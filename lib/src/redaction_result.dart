@@ -73,10 +73,9 @@ String restoreTokens(String input, Map<String, String> mapping) {
   if (mapping.isEmpty || input.isEmpty) return input;
   final tokens = mapping.keys.toList()
     ..sort((a, b) => b.length.compareTo(a.length));
-  final pattern = RegExp(
-    tokens.map(_lenientTokenPattern).join('|'),
-    caseSensitive: false,
-  );
+  // Case-sensitive overall: bracket tokens opt into leniency via per-character
+  // classes below, while custom-replacer tokens are matched exactly.
+  final pattern = RegExp(tokens.map(_lenientTokenPattern).join('|'));
   return input.replaceAllMapped(pattern, (m) {
     final raw = m.group(0)!;
     return mapping[raw] ?? mapping[_canonicalToken(raw)] ?? raw;
@@ -87,11 +86,12 @@ final RegExp _bracketToken = RegExp(r'^\[[A-Z0-9_]+\]$');
 
 String _lenientTokenPattern(String token) {
   if (!_bracketToken.hasMatch(token)) return RegExp.escape(token);
-  final body = token
-      .substring(1, token.length - 1)
-      .split('')
-      .map((c) => c == '_' ? r'\\?_' : RegExp.escape(c))
-      .join();
+  final body = token.substring(1, token.length - 1).split('').map((c) {
+    if (c == '_') return r'\\?_';
+    final upper = c.toUpperCase();
+    final lower = c.toLowerCase();
+    return upper == lower ? RegExp.escape(c) : '[$upper$lower]';
+  }).join();
   return '\\[$body\\]';
 }
 

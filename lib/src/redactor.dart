@@ -142,15 +142,23 @@ class Redactor {
   /// Seeds [counters] past any token-shaped literals already present in the
   /// input, so generated placeholders never collide with pre-existing text
   /// (and restore can never corrupt the user's own literal `[EMAIL_1]`).
+  ///
+  /// The scan is as lenient as [restoreTokens] — case-insensitive and
+  /// tolerant of escaped underscores — because any literal that restore
+  /// *could* later match must be treated as occupied.
   static void _seedCounters(String text, Map<String, int> counters) {
     for (final m in _literalToken.allMatches(text)) {
-      final label = m.group(1)!;
-      final index = int.parse(m.group(2)!);
+      final label = m.group(1)!.replaceAll(r'\', '').toUpperCase();
+      // tryParse: absurd indices ([X_99999999999999999999]) must not throw.
+      final index = int.tryParse(m.group(2)!);
+      if (index == null) continue;
       if (index > (counters[label] ?? 0)) counters[label] = index;
     }
   }
 
-  static final RegExp _literalToken = RegExp(r'\[([A-Z][A-Z0-9_]*)_(\d+)\]');
+  static final RegExp _literalToken = RegExp(
+    r'\[([A-Za-z][A-Za-z0-9_\\]*?)\\?_(\d{1,9})\]',
+  );
 
   /// Runs every detector, tagging each match with its detector's priority
   /// (its index in [detectors]; lower wins equal-length overlap ties).
