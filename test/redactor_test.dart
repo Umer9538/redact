@@ -14,7 +14,8 @@ void main() {
       expect(result.types, {PiiType.email, PiiType.phone});
     });
 
-    test('the same value reuses one placeholder; distinct values increment', () {
+    test('the same value reuses one placeholder; distinct values increment',
+        () {
       final result = redactor.redact(
         'from a@x.com to b@x.com and cc a@x.com',
       );

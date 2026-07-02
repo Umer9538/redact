@@ -63,8 +63,7 @@ void main() {
     test('matches mod-97-valid IBANs (spaced or contiguous)', () {
       expect(found(d, 'iban GB82 WEST 1234 5698 7654 32 end'),
           ['GB82 WEST 1234 5698 7654 32']);
-      expect(found(d, 'DE89370400440532013000'),
-          ['DE89370400440532013000']);
+      expect(found(d, 'DE89370400440532013000'), ['DE89370400440532013000']);
     });
     test('rejects check-digit-invalid IBANs', () {
       expect(found(d, 'GB00 WEST 1234 5698 7654 32'), isEmpty);
@@ -117,8 +116,8 @@ void main() {
   group('secret', () {
     final d = Detectors.secret;
     test('matches well-known key formats', () {
-      expect(found(d, 'key AKIAIOSFODNN7EXAMPLE used'),
-          ['AKIAIOSFODNN7EXAMPLE']);
+      expect(
+          found(d, 'key AKIAIOSFODNN7EXAMPLE used'), ['AKIAIOSFODNN7EXAMPLE']);
       expect(
         found(d, 'gh ghp_1234567890abcdefghijklmnopqrstuvwxyz done'),
         ['ghp_1234567890abcdefghijklmnopqrstuvwxyz'],

@@ -67,8 +67,10 @@ void main() {
     });
 
     test('value equality and hashCode', () {
-      const a = PiiMatch(type: PiiType.email, value: 'a@b.co', start: 0, end: 6);
-      const b = PiiMatch(type: PiiType.email, value: 'a@b.co', start: 0, end: 6);
+      const a =
+          PiiMatch(type: PiiType.email, value: 'a@b.co', start: 0, end: 6);
+      const b =
+          PiiMatch(type: PiiType.email, value: 'a@b.co', start: 0, end: 6);
       expect(a, b);
       expect(a.hashCode, b.hashCode);
     });
