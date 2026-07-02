@@ -47,7 +47,8 @@ abstract final class Detectors {
   static final Detector creditCard = PatternDetector(
     name: 'credit-card',
     type: PiiType.creditCard,
-    pattern: RegExp(r'(?<![\w-])\d(?:[ -]?\d){12,}(?!\w)'),
+    // (?<!\w) only: a '-' before the number ('ref-4111...') must not hide it.
+    pattern: RegExp(r'(?<!\w)\d(?:[ -]?\d){12,}(?!\w)'),
     refine: _refineCard,
   );
 
@@ -315,18 +316,53 @@ bool _looksLikeDate(List<String> groups) {
 /// Trims a card match that bridged into an adjacent number: drop trailing
 /// separator-delimited chunks until 13–19 digits with one consistent separator
 /// pass the Luhn checksum. Returns null when no such prefix exists.
+///
+/// Works on index math (no per-iteration string copies), only running the
+/// checksum inside the plausible 13–19 digit window, and bails early on
+/// digit-heavy spans no card context could produce — so adversarial
+/// separator-digit runs stay cheap.
 String? _refineCard(String raw) {
-  var value = raw;
+  var digits = _digitCount(raw);
+  // A card plus an adjacent number never bridges this many digits; longer
+  // spans are IDs/tables, not cards.
+  if (digits > 48) return null;
+  var end = raw.length;
   while (true) {
-    final digits = value.replaceAll(_nonDigits, '');
-    if (digits.length < 13) return null;
-    if (digits.length <= 19 && _oneSeparator(value) && isLuhnValid(digits)) {
-      return value;
+    if (digits < 13) return null;
+    if (digits <= 19) {
+      final value = raw.substring(0, end);
+      final compact = value.replaceAll(_nonDigits, '');
+      if (_oneSeparator(value) &&
+          _noSingleDigitChunks(value) &&
+          isLuhnValid(compact)) {
+        return value;
+      }
     }
-    final cut = value.lastIndexOf(RegExp(r'[ -]'));
+    final cut = raw.lastIndexOf(_cardSeparator, end - 1);
     if (cut <= 0) return null;
-    value = value.substring(0, cut);
+    for (var i = cut; i < end; i++) {
+      final unit = raw.codeUnitAt(i);
+      if (unit >= 0x30 && unit <= 0x39) digits--;
+    }
+    end = cut;
   }
+}
+
+final RegExp _cardSeparator = RegExp(r'[ -]');
+
+/// No real card grouping contains a lone digit (4-4-4-4, 4-6-5, 4-4-4-4-3…),
+/// so single-digit chunks mark a digit table or list, not a card.
+bool _noSingleDigitChunks(String value) {
+  var run = 0;
+  for (final unit in value.codeUnits) {
+    if (unit >= 0x30 && unit <= 0x39) {
+      run++;
+    } else {
+      if (run == 1) return false;
+      run = 0;
+    }
+  }
+  return run != 1;
 }
 
 bool _validSsn(String value) {
@@ -350,7 +386,9 @@ bool _validItin(String value) {
 
 /// Trims an IBAN match whose spaced form swallowed a following short word:
 /// drop trailing space-separated groups until the mod-97 check passes.
+/// Bails early on spans far longer than any IBAN (34 chars + spacing).
 String? _refineIban(String raw) {
+  if (raw.length > 48) return null;
   var value = raw;
   while (true) {
     if (_validIban(value)) return value;

@@ -84,6 +84,36 @@ void main() {
       expect(found(d, 'ref 4111111111111112'), isEmpty);
       expect(found(d, 'id 1234567812345678'), isEmpty);
     });
+    test('a card followed by an adjacent number is trimmed, not leaked', () {
+      expect(found(d, 'card 4111 1111 1111 1111 12/26 thx'),
+          ['4111 1111 1111 1111']);
+      expect(found(d, 'card 4111 1111 1111 1111 12'), ['4111 1111 1111 1111']);
+    });
+    test('does not bridge two adjacent SSN-shaped numbers into a card', () {
+      expect(found(d, 'ssns 123-45-6789 123-45-6789 end'), isEmpty);
+    });
+    test('rejects mixed-separator groupings', () {
+      expect(found(d, 'odd 4111-1111 1111-1111 end'), isEmpty);
+    });
+    test('rejects long contiguous digit runs outright', () {
+      expect(found(d, 'id 41111111111111111111 end'), isEmpty); // 20 digits
+    });
+    test('a card glued behind a dash is still detected', () {
+      expect(found(d, 'ref-4111111111111111 shipped'), ['4111111111111111']);
+      expect(found(d, 'nr-4111 1111 1111 1111 ok'), ['4111 1111 1111 1111']);
+    });
+    test('adversarial separator-digit runs stay fast and clean', () {
+      // 10KB of '1 2 3 4 ...' used to trigger a refine blowup measured in
+      // tens of seconds; with early bails it must finish quickly and match
+      // nothing.
+      final adversarial = List.generate(5000, (i) => i % 10).join(' ');
+      final stopwatch = Stopwatch()..start();
+      final result = Redactor().redact(adversarial);
+      stopwatch.stop();
+      expect(result.hasPii, isFalse);
+      expect(stopwatch.elapsedMilliseconds, lessThan(2000),
+          reason: 'took ${stopwatch.elapsedMilliseconds} ms');
+    });
   });
 
   group('ssn', () {
