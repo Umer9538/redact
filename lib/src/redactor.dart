@@ -75,9 +75,46 @@ class Redactor {
   /// the exact spans [redact] would rewrite. Useful for highlighting detected
   /// PII in a UI (each [PiiMatch] carries `start`/`end` offsets into [text])
   /// or for auditing without producing redacted output.
+  ///
+  /// Detection iterates to a fixpoint: after each round, the accepted spans
+  /// are masked out and the detectors run again over what remains. This
+  /// covers values that a first-round candidate had *bridged into* and then
+  /// lost to a longer winner — e.g. a phone number right after an IBAN —
+  /// which a single pass would silently skip. Allow-listed values take part
+  /// as blockers (they win their span so no other detector can claim a piece
+  /// of them) but are filtered from the returned matches.
   List<PiiMatch> detect(String text) {
-    final accepted = _resolve(_collect(text))..sort();
-    return List.unmodifiable(accepted);
+    final accepted = <PiiMatch>[];
+    var masked = text;
+    // Each round accepts at least one new span or stops, and spans never
+    // overlap, so this terminates; the cap is a safety net.
+    for (var round = 0; round < 8; round++) {
+      final resolved = _resolve(_collect(masked))
+          .where((m) =>
+              !accepted.any(m.overlaps) &&
+              !m.value.codeUnits.contains(_maskChar))
+          .toList();
+      if (resolved.isEmpty) break;
+      accepted.addAll(resolved);
+      masked = _mask(masked, resolved);
+    }
+    final visible = accepted.where((m) => !allowList.contains(m.value)).toList()
+      ..sort();
+    return List.unmodifiable(visible);
+  }
+
+  /// NUL: no built-in detector's character classes include it, so masked
+  /// spans cannot take part in (or be bridged across by) later rounds.
+  static const int _maskChar = 0x00;
+
+  static String _mask(String text, List<PiiMatch> spans) {
+    final units = text.codeUnits.toList();
+    for (final span in spans) {
+      for (var i = span.start; i < span.end; i++) {
+        units[i] = _maskChar;
+      }
+    }
+    return String.fromCharCodes(units);
   }
 
   /// Detects PII in [text] and returns the rewritten text plus a reversal vault.
@@ -162,12 +199,12 @@ class Redactor {
 
   /// Runs every detector, tagging each match with its detector's priority
   /// (its index in [detectors]; lower wins equal-length overlap ties).
-  /// Matches whose value is in [allowList] are dropped here.
+  /// Allow-listed matches are kept: they must win their span as blockers and
+  /// are only filtered from the final result in [detect].
   List<(PiiMatch, int)> _collect(String text) {
     final out = <(PiiMatch, int)>[];
     for (var priority = 0; priority < detectors.length; priority++) {
       for (final match in detectors[priority].detect(text)) {
-        if (allowList.contains(match.value)) continue;
         out.add((match, priority));
       }
     }

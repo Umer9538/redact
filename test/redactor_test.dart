@@ -267,6 +267,26 @@ void main() {
     });
   });
 
+  group('gap re-detection', () {
+    test('a phone right after an IBAN is not lost to the dropped bridge', () {
+      // The phone pattern's first-round candidates all overlap the IBAN and
+      // are dropped; a second round over the gaps must find the phone whole.
+      final result =
+          Redactor().redact('DE89 3704 0044 0532 0130 00 415 555 0132');
+      expect(result.text, '[IBAN_1] [PHONE_1]');
+      expect(
+        result.restore(result.text),
+        'DE89 3704 0044 0532 0130 00 415 555 0132',
+      );
+    });
+
+    test('a phone right after a card is re-detected in the gap', () {
+      final result =
+          Redactor().redact('pay 4111 1111 1111 1111 415 555 0132 now');
+      expect(result.text, 'pay [CREDIT_CARD_1] [PHONE_1] now');
+    });
+  });
+
   group('allowList', () {
     test('allow-listed values are never redacted', () {
       final redactor = Redactor(allowList: {'support@acme.com'});
@@ -274,6 +294,15 @@ void main() {
           redactor.redact('write support@acme.com, not jane@acme.com');
       expect(result.text, 'write support@acme.com, not [EMAIL_1]');
       expect(result.mapping['[EMAIL_1]'], 'jane@acme.com');
+    });
+
+    test('an allow-listed span shields its sub-spans from other detectors', () {
+      // Without blocker semantics the phone detector would partially redact
+      // the allow-listed card, mangling it.
+      final redactor = Redactor(allowList: {'4111 1111 1111 1111'});
+      final result = redactor.redact('test card 4111 1111 1111 1111 stays');
+      expect(result.text, 'test card 4111 1111 1111 1111 stays');
+      expect(result.hasPii, isFalse);
     });
   });
 
