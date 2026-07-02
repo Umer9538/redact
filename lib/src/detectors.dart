@@ -268,8 +268,16 @@ String? _refinePhone(String raw) {
 bool _validPhone(String value) {
   final digits = _digitCount(value);
   if (digits < 7 || digits > 15) return false;
+  // A '+' country code or parenthesised area code is strong phone structure.
   if (value.startsWith('+') || value.contains('(')) return true;
+  // Without that structure, be strict: a real phone number is written with
+  // ONE separator style throughout, and no single-digit groups. This rejects
+  // ISBNs (978-0-306-40615-7), European decimal groupings (1 234 567,89 has
+  // a lone '1'), and spans that bridged two different numbers ('123-45-6789
+  // 415-555-0132' mixes '-' and ' ').
+  if (!_oneSeparator(value)) return false;
   final groups = value.split(RegExp(r'[ .-]'));
+  if (groups.any((g) => g.length == 1)) return false;
   // Year ranges and dddd-dddd reference numbers are not phone numbers.
   if (groups.length == 2 && groups[0].length == 4 && groups[1].length == 4) {
     return false;

@@ -134,6 +134,19 @@ void main() {
       expect(result.matches.single.type, PiiType.creditCard);
     });
 
+    test('an SSN adjacent to a phone number yields two clean matches', () {
+      // The phone pattern can bridge both into one 15-digit span; the mixed
+      // separator rule must reject the bridge so each is caught separately.
+      final result = Redactor().redact('id 123-45-6789 415-555-0132 end');
+      expect(result.text, 'id [SSN_1] [PHONE_1] end');
+    });
+
+    test('a card adjacent to an SSN yields two clean matches', () {
+      final result =
+          Redactor().redact('use 4111 1111 1111 1111 123-45-6789 end');
+      expect(result.text, 'use [CREDIT_CARD_1] [SSN_1] end');
+    });
+
     test('a longer span beats a shorter higher-priority match inside it', () {
       // Mirrors the real IBAN-vs-card case: a low-priority detector matching
       // the full value must beat a high-priority detector matching a fragment.
