@@ -285,6 +285,17 @@ void main() {
           Redactor().redact('pay 4111 1111 1111 1111 415 555 0132 now');
       expect(result.text, 'pay [CREDIT_CARD_1] [PHONE_1] now');
     });
+
+    test('IBAN + card + phone adjacency: all three caught cleanly', () {
+      // The IBAN's spaced form swallows the card's groups; a Luhn-valid
+      // window even bridges the IBAN tail and card head. Refine + length-first
+      // resolution + gap re-detection must land on exactly three clean spans.
+      const original =
+          'PK36 SCBL 0000 0011 2345 6702 4111 1111 1111 1111 0300-1234567';
+      final result = Redactor().redact(original);
+      expect(result.text, '[IBAN_1] [CREDIT_CARD_1] [PHONE_1]');
+      expect(result.restore(result.text), original);
+    });
   });
 
   group('allowList', () {

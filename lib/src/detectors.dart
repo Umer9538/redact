@@ -390,17 +390,28 @@ bool _validItin(String value) {
       (group >= 94 && group <= 99);
 }
 
-/// Trims an IBAN match whose spaced form swallowed a following short word:
-/// drop trailing space-separated groups until the mod-97 check passes.
-/// Bails early on spans far longer than any IBAN (34 chars + spacing).
+/// Trims an IBAN match whose spaced form swallowed following groups (a short
+/// word, or even an adjacent card number's groups): drop trailing
+/// space-separated groups until the mod-97 check passes.
+///
+/// Index math keeps this O(length): the expensive checksum only runs while
+/// the compact length is inside the plausible 15–34 IBAN window.
 String? _refineIban(String raw) {
-  if (raw.length > 48) return null;
-  var value = raw;
+  var end = raw.length;
+  var compactLength = 0;
+  for (final unit in raw.codeUnits) {
+    if (unit != 0x20) compactLength++;
+  }
   while (true) {
-    if (_validIban(value)) return value;
-    final cut = value.lastIndexOf(' ');
+    if (compactLength < 15) return null;
+    if (compactLength <= 34) {
+      final value = raw.substring(0, end);
+      if (_validIban(value)) return value;
+    }
+    final cut = raw.lastIndexOf(' ', end - 1);
     if (cut <= 0) return null;
-    value = value.substring(0, cut);
+    compactLength -= end - cut - 1; // dropped chunk, excluding the space
+    end = cut;
   }
 }
 
